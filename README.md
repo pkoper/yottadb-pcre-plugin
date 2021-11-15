@@ -54,3 +54,5 @@ YDB>w $&pcre.test("abc","/ab")
 YDB>w $&pcre.error()
 16386,&pcre.test,%PCRE-E-SLASH, Missing slash in search pattern
 ```
+
+See more in [pcreexamples.m](https://github.com/pkoper/yottadb-pcre-plugin/blob/main/pcreexamples.m)
