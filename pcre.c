@@ -19,6 +19,11 @@ typedef struct {
 
 typedef gtm_string_t output_t;
 
+enum return_value {
+  OK = 1,
+  FAIL = 0,
+};
+
 enum error_number {
   E_OK = 0,
   E_INTERNAL,
@@ -64,9 +69,9 @@ static void clear_error(error_t *error, const char *func) {
   error->append.length = 0;
 }
 
-#define ERROR(code) ({ \
+#define ERROR_FAIL(code) ({ \
     error->number = code; \
-    -1; \
+    FAIL; \
   })
 
 #define ERROR_NULL(code) ({ \
@@ -211,11 +216,11 @@ static void clear_context(context_t *context) {
 static int copy_input(error_t *error, input_t *dst, input_t *src) {
   dst->address = malloc(src->length);
   if (!dst->address) {
-    return ERROR(E_MEM);
+    return ERROR_FAIL(E_MEM);
   }
   memcpy(dst->address, src->address, src->length);
   dst->length = src->length;
-  return 0;
+  return OK;
 }
 
 typedef struct {
@@ -259,11 +264,11 @@ static int parse_regex_opts(regex_opts_t *opts, char *begin, char *end) {
         opts->v++;
         break;
       default:
-        return -1;
+        return FAIL;
     }
     p++;
   }
-  return 0;
+  return OK;
 }
 
 static uint32_t regex_compile_options(regex_opts_t *opts) {
@@ -288,25 +293,25 @@ static uint32_t regex_compile_options(regex_opts_t *opts) {
 
 static int parse_regex(error_t *error, input_t *regex, input_t *pattern, regex_opts_t *opts) {
   if (pattern->length < 2 || pattern->address[0] != '/') {
-    return ERROR(E_SLASH);
+    return ERROR_FAIL(E_SLASH);
   }
   regex->address = pattern->address + 1;
   regex->length = pattern->length - 1;
   char *last_slash = memrchr(regex->address, '/', regex->length);
   if (!last_slash) {
-    return ERROR(E_SLASH);
+    return ERROR_FAIL(E_SLASH);
   }
   regex->length = last_slash - regex->address;
-  if (parse_regex_opts(opts, last_slash + 1, pattern->address + pattern->length)) {
-    return ERROR(E_OPT);
+  if (!parse_regex_opts(opts, last_slash + 1, pattern->address + pattern->length)) {
+    return ERROR_FAIL(E_OPT);
   }
-  return 0;
+  return OK;
 }
 
 static int regex_compile(error_t *error, pcre2_code **re, regex_opts_t *opts, input_t *pattern) {
   input_t regex;
-  if (parse_regex(error, &regex, pattern, opts)) {
-    return -1;
+  if (!parse_regex(error, &regex, pattern, opts)) {
+    return FAIL;
   }
   uint32_t compile_options = regex_compile_options(opts);
   int error_number;
@@ -315,9 +320,9 @@ static int regex_compile(error_t *error, pcre2_code **re, regex_opts_t *opts, in
   if (!*re) {
     error_append(error, " at offset %d: ", (int)error_offset);
     error_append_pcre_message(error, error_number);
-    return ERROR(E_PATTERN);
+    return ERROR_FAIL(E_PATTERN);
   }
-  return 0;
+  return OK;
 }
 
 EXPORT gtm_string_t *replace(int argc, input_t *text, input_t *search, input_t *replace) {
@@ -332,7 +337,7 @@ EXPORT gtm_string_t *replace(int argc, input_t *text, input_t *search, input_t *
   }
   regex_opts_t opts;
   pcre2_code *re;
-  if (regex_compile(error, &re, &opts, search)) {
+  if (!regex_compile(error, &re, &opts, search)) {
     return NULL;
   }
   if (argc < 3) {
@@ -390,7 +395,7 @@ EXPORT gtm_string_t *test(int argc, input_t *text, input_t *search) {
   }
   regex_opts_t opts;
   pcre2_code *re;
-  if (regex_compile(error, &re, &opts, search)) {
+  if (!regex_compile(error, &re, &opts, search)) {
     return NULL;
   }
   pcre2_match_data *match_data = pcre2_match_data_create_from_pattern(re, NULL);
@@ -548,7 +553,7 @@ EXPORT gtm_string_t *match(int argc, input_t *text, input_t *search, input_t *se
     return copy(error, text);
   }
   regex_opts_t opts;
-  if (regex_compile(error, &context->re, &opts, search)) {
+  if (!regex_compile(error, &context->re, &opts, search)) {
     return NULL;
   }
   pcre2_pattern_info(context->re, PCRE2_INFO_CAPTURECOUNT, &context->groups);
@@ -594,12 +599,12 @@ EXPORT gtm_string_t *match(int argc, input_t *text, input_t *search, input_t *se
     }
     context->next = 1;
   }
-  if (copy_input(error, &context->text, text)) {
+  if (!copy_input(error, &context->text, text)) {
     clear_context(context);
     return NULL;
   }
   if (sep->length) {
-    if (copy_input(error, &context->sep, sep)) {
+    if (!copy_input(error, &context->sep, sep)) {
       clear_context(context);
       return NULL;
     }
@@ -673,7 +678,7 @@ EXPORT gtm_string_t *next(UNUSED int argc) {
 
 static int parse_int(input_t *input, int *result, int max_digits) {
   if (input->length > max_digits) {
-    return -1;
+    return FAIL;
   }
   char *p = input->address;
   char *q = p + input->length;
@@ -684,10 +689,10 @@ static int parse_int(input_t *input, int *result, int max_digits) {
     p++;
   }
   if (p < q) {
-    return -1;
+    return FAIL;
   }
   *result = n;
-  return 0;
+  return OK;
 }
 
 static int mem_eq(char *a, int a_length, char *b, int b_length) {
@@ -701,7 +706,7 @@ static int name2i(context_t *context, input_t *name, int *i) {
   if (!context->names.table) {
     pcre2_pattern_info(context->re, PCRE2_INFO_NAMECOUNT, &context->names.count);
     if (!context->names.count) {
-      return -1;
+      return FAIL;
     }
     pcre2_pattern_info(context->re, PCRE2_INFO_NAMETABLE, &context->names.table);
     pcre2_pattern_info(context->re, PCRE2_INFO_NAMEENTRYSIZE, &context->names.entry_size);
@@ -713,11 +718,11 @@ static int name2i(context_t *context, input_t *name, int *i) {
     int length = strlen(address);
     if (!mem_eq(address, length, name->address, name->length)) {
       *i = n;
-      return 0;
+      return OK;
     }
     p += context->names.entry_size;
   }
-  return -1;
+  return FAIL;
 }
 
 static output_t *vec_string(error_t *error, PCRE2_SIZE *ovector, int i, input_t *sep) {
@@ -750,8 +755,8 @@ static gtm_string_t *group_get(error_t *error, int argc, input_t *name, input_t 
     return ERROR_NULL(E_GROUP);
   }
   int i;
-  if (parse_int(name, &i, 4)) {
-    if (name2i(context, name, &i)) {
+  if (!parse_int(name, &i, 4)) {
+    if (!name2i(context, name, &i)) {
       return ERROR_NULL(E_GROUP);
     }
   } else {
